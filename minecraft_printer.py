@@ -6,8 +6,8 @@
 ║  sends each one to your physical printer. Every. Single. One.    ║
 ║                                                                  ║
 ║  Requirements:                                                   ║
-║    pip install mss pillow pygetwindow tkinter                    ║
-║    (tkinter is usually built into Python already)                ║
+║    pip install mss pillow pygetwindow pywin32                    ║
+║    (tkinter is built into Python already)                        ║
 ║                                                                  ║
 ║  You will also need:                                             ║
 ║    - A real printer                                              ║
@@ -84,38 +84,77 @@ def estimate_ink_ml(img: Image.Image) -> float:
 
 
 def send_to_printer(pil_img: Image.Image):
-    """Print a PIL image on the default system printer."""
+    """Print a PIL image silently — no dialogs, no popups, no questions."""
     global pages_printed, ink_estimate_ml
-
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-        tmp = f.name
-    pil_img.save(tmp, "PNG", dpi=(150, 150))
 
     system = platform.system()
     try:
         if system == "Windows":
-            # ShellExecute "print" verb — uses the default image viewer to print
-            import ctypes
-            ctypes.windll.shell32.ShellExecuteW(
-                None, "print", tmp, None, None, 0
-            )
+            _print_windows_silent(pil_img)
         elif system == "Darwin":
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                tmp = f.name
+            pil_img.save(tmp, "PNG", dpi=(150, 150))
             subprocess.Popen(["lpr", tmp],
                              stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
-        else:  # Linux
+            threading.Timer(5.0, lambda: os.path.exists(tmp) and os.unlink(tmp)).start()
+        else:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                tmp = f.name
+            pil_img.save(tmp, "PNG", dpi=(150, 150))
             subprocess.Popen(["lpr", tmp],
                              stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL)
+            threading.Timer(5.0, lambda: os.path.exists(tmp) and os.unlink(tmp)).start()
     except Exception as e:
         print(f"[printer] error: {e}")
-    finally:
-        # give the spooler a moment to read the file before we delete it
-        threading.Timer(5.0, lambda: os.path.exists(tmp) and os.unlink(tmp)).start()
 
     pages_printed   += 1
     ink_estimate_ml += estimate_ink_ml(pil_img)
     update_stats_label()
+
+
+def _print_windows_silent(pil_img: Image.Image):
+    """
+    Draw directly to the Windows printer DC using win32print + win32ui.
+    No temp files. No PowerShell. No dialogs. Ever.
+    Goes straight to the spooler in memory.
+    """
+    try:
+        import win32print
+        import win32ui
+        from PIL import ImageWin
+    except ImportError:
+        print("[printer] pywin32 missing — run: pip install pywin32")
+        return
+
+    printer_name = win32print.GetDefaultPrinter()
+
+    hdc = win32ui.CreateDC()
+    hdc.CreatePrinterDC(printer_name)
+
+    page_w = hdc.GetDeviceCaps(110)  # HORZRES  — printable width in pixels
+    page_h = hdc.GetDeviceCaps(111)  # VERTRES  — printable height in pixels
+
+    # Scale image to fit the page, preserving aspect ratio
+    img_w, img_h = pil_img.size
+    scale  = min(page_w / img_w, page_h / img_h)
+    draw_w = int(img_w * scale)
+    draw_h = int(img_h * scale)
+    x_off  = (page_w - draw_w) // 2
+    y_off  = (page_h - draw_h) // 2
+
+    hdc.StartDoc("Minecraft Frame")
+    hdc.StartPage()
+
+    dib = ImageWin.Dib(pil_img)
+    dib.draw(hdc.GetHandleOutput(),
+             (x_off, y_off, x_off + draw_w, y_off + draw_h))
+
+    hdc.EndPage()
+    hdc.EndDoc()
+    hdc.DeleteDC()
 
 
 def printer_worker():
@@ -231,13 +270,53 @@ def launch_stats_window():
 
 # ── minecraft capture ─────────────────────────────────────────────────────────
 
+# Browser suffixes that mean this is a website tab, not the actual game
+BROWSER_SUFFIXES = (
+    "- google chrome",
+    "- chromium",
+    "- mozilla firefox",
+    "- firefox",
+    "- microsoft edge",
+    "- opera",
+    "- brave",
+    "- safari",
+    "- vivaldi",
+    "- arc",
+)
+
 def find_minecraft_window():
-    """Return the first window whose title contains 'minecraft' (case-insensitive)."""
+    """
+    Return the actual Minecraft game window — nothing else.
+
+    Rules:
+      1. Title must start with 'Minecraft' (not just contain it).
+      2. Title must NOT end with a browser name (e.g. "- Google Chrome").
+         This stops it from printing your Claude/wiki/YouTube tab.
+      3. Window must be at least 640x480 — the game is never smaller than that.
+      4. Window must not be minimised (width/height > 0).
+    """
     try:
         windows = gw.getAllWindows()
         for w in windows:
-            if MINECRAFT_TITLE_KEYWORD in w.title.lower():
-                return w
+            title = (w.title or "").strip().lower()
+
+            # Rule 1 — must start with minecraft
+            if not title.startswith(MINECRAFT_TITLE_KEYWORD):
+                continue
+
+            # Rule 2 — must not be a browser tab
+            if any(title.endswith(suffix) for suffix in BROWSER_SUFFIXES):
+                continue
+
+            # Rule 3 — must be a real game-sized window
+            if w.width < 640 or w.height < 480:
+                continue
+
+            # Rule 4 — must not be minimised
+            if w.width == 0 or w.height == 0:
+                continue
+
+            return w
     except Exception:
         pass
     return None
@@ -317,6 +396,7 @@ def capture_loop():
 
 def main():
     print(__doc__)
+    print(f"[info] Printing silently via GDI (no dialogs)")
     print(f"[info] Capture rate  : {CAPTURE_FPS} FPS")
     print(f"[info] That's roughly {CAPTURE_FPS * 60} pages per minute.")
     print(f"[info] Or {CAPTURE_FPS * 3600} pages per hour.")
