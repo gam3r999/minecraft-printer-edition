@@ -1,71 +1,74 @@
 @echo off
-title Minecraft Printer - Setup
+title Minecraft Printer - Compiler
 color 0A
 
 echo.
 echo  ==========================================
-echo   MINECRAFT PRINTER - AUTO SETUP
+echo   MINECRAFT PRINTER - COMPILER
 echo  ==========================================
 echo.
-echo  This will install everything needed and
-echo  launch the printer. Sit tight.
-echo.
 
-:: Check Python is installed
+:: Check Python
 python --version >nul 2>&1
 if errorlevel 1 (
     color 0C
-    echo  ERROR: Python is not installed or not in PATH.
-    echo.
-    echo  Download it from: https://www.python.org/downloads/
-    echo  Make sure to check "Add Python to PATH" during install.
+    echo  ERROR: Python not found.
+    echo  Download from: https://www.python.org/downloads/
+    echo  Check "Add Python to PATH" during install.
     echo.
     pause
     exit /b 1
 )
 
-echo  [1/5] Python found. Good.
-echo.
+echo  [1/6] Python found.
 
-echo  [2/5] Updating pip...
+:: Install dependencies
+echo  [2/6] Installing dependencies...
 python -m pip install --upgrade pip --quiet
-
-echo  [3/5] Installing mss, pillow, pygetwindow...
-python -m pip install mss pillow pygetwindow --quiet
+python -m pip install mss pillow pygetwindow pywin32 pyinstaller --quiet
 if errorlevel 1 (
     color 0C
-    echo.
-    echo  ERROR: Failed to install packages.
-    echo  Check your internet connection and try again.
-    echo.
+    echo  ERROR: pip install failed. Check your internet.
     pause
     exit /b 1
 )
 
-echo  [4/5] Installing pywin32 (silent printer control)...
-python -m pip install pywin32 --quiet
+echo  [3/6] Dependencies installed.
+
+:: Compile to exe
+echo  [4/6] Compiling to .exe (this will take a minute)...
+pyinstaller --onefile --noconsole --name "MinecraftPrinter" --hidden-import=win32print --hidden-import=win32ui --hidden-import=PIL.ImageWin --hidden-import=pygetwindow --hidden-import=mss minecraft_printer.py >nul 2>&1
 if errorlevel 1 (
     color 0C
-    echo.
-    echo  ERROR: Failed to install pywin32.
-    echo  Check your internet connection and try again.
-    echo.
+    echo  ERROR: Compilation failed.
+    echo  Re-run this script and check the output.
     pause
     exit /b 1
 )
 
-echo  [5/5] All packages installed.
-echo.
-echo  ==========================================
-echo   Launching Minecraft Printer...
-echo   Make sure Minecraft is already open.
-echo  ==========================================
-echo.
+echo  [5/6] Compiled successfully.
 
-python minecraft_printer.py
-
-if errorlevel 1 (
-    echo.
-    echo  The script exited with an error. See above.
+:: Move exe to current folder for convenience
+if exist "dist\MinecraftPrinter.exe" (
+    copy /Y "dist\MinecraftPrinter.exe" "MinecraftPrinter.exe" >nul
+    rmdir /S /Q dist >nul 2>&1
+    rmdir /S /Q build >nul 2>&1
+    del /Q MinecraftPrinter.spec >nul 2>&1
+    echo  [6/6] Cleaned up build files.
+) else (
+    color 0C
+    echo  ERROR: EXE not found after build. Something went wrong.
     pause
+    exit /b 1
 )
+
+echo.
+echo  ==========================================
+echo   MinecraftPrinter.exe is ready.
+echo   Launching now...
+echo   Make sure Minecraft is open first.
+echo  ==========================================
+echo.
+
+start "" "MinecraftPrinter.exe"
+exit
